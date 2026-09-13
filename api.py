@@ -1,12 +1,45 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException
+)
 
-from pydantic import BaseModel, Field
-from typing import Literal
+from fastapi.middleware.cors import (
+    CORSMiddleware
+)
 
-import pandas as pd
-import joblib
-import os
+from sqlalchemy.orm import Session
+
+
+from database import (
+    Base,
+    engine,
+    get_db
+)
+
+from models import StudentDB
+
+from schemas import (
+    StudentCreate,
+    StudentData,
+    StudentUpdate
+)
+
+from prediction_service import (
+    model,
+    model_features,
+    model_name,
+    run_prediction
+)
+
+
+# ============================================================
+# CREATE DATABASE TABLES
+# ============================================================
+
+Base.metadata.create_all(
+    bind=engine
+)
 
 
 # ============================================================
@@ -15,14 +48,17 @@ import os
 
 app = FastAPI(
 
-    title="Student Academic Risk Prediction API",
-
-    description=(
-        "Predict whether a student is likely to "
-        "Dropout, remain Enrolled, or Graduate."
+    title=(
+        "Student Academic Risk "
+        "Prediction API"
     ),
 
-    version="2.0.0"
+    description=(
+        "Student CRUD operations and "
+        "academic risk prediction."
+    ),
+
+    version="3.0.0"
 )
 
 
@@ -35,9 +71,7 @@ app.add_middleware(
     CORSMiddleware,
 
     allow_origins=[
-
         "http://localhost:5173",
-
         "http://127.0.0.1:5173"
     ],
 
@@ -50,153 +84,93 @@ app.add_middleware(
 
 
 # ============================================================
-# FILE PATHS
+# HELPER
 # ============================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+def student_to_dict(
+    student: StudentDB
+):
+
+    return {
+
+        "id":
+            student.id,
+
+        "name":
+            student.name,
+
+        "age":
+            student.age,
+
+        "gender":
+            student.gender,
+
+        "admission_grade":
+            student.admission_grade,
+
+        "scholarship_holder":
+            student.scholarship_holder,
+
+        "debtor":
+            student.debtor,
+
+        "tuition_fees_up_to_date":
+            student.tuition_fees_up_to_date,
+
+        "semester1_enrolled_units":
+            student.semester1_enrolled_units,
+
+        "semester1_approved_units":
+            student.semester1_approved_units,
+
+        "semester1_grade":
+            student.semester1_grade,
+
+        "semester2_enrolled_units":
+            student.semester2_enrolled_units,
+
+        "semester2_approved_units":
+            student.semester2_approved_units,
+
+        "semester2_grade":
+            student.semester2_grade
+    }
 
 
-MODEL_PATH = os.path.join(
+def validate_student(
+    data: StudentData
+):
 
-    BASE_DIR,
+    if (
+        data.semester1_approved_units
+        >
+        data.semester1_enrolled_units
+    ):
 
-    "student_risk_model.pkl"
-)
-
-
-FEATURE_PATH = os.path.join(
-
-    BASE_DIR,
-
-    "model_features.pkl"
-)
-
-
-MODEL_NAME_PATH = os.path.join(
-
-    BASE_DIR,
-
-    "model_name.pkl"
-)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Semester 1 approved units "
+                "cannot be greater than "
+                "enrolled units."
+            )
+        )
 
 
-# ============================================================
-# LOAD MODEL
-# ============================================================
+    if (
+        data.semester2_approved_units
+        >
+        data.semester2_enrolled_units
+    ):
 
-try:
-
-    model = joblib.load(
-        MODEL_PATH
-    )
-
-    model_features = joblib.load(
-        FEATURE_PATH
-    )
-
-    model_name = joblib.load(
-        MODEL_NAME_PATH
-    )
-
-
-    print(
-        "======================================"
-    )
-
-    print(
-        "MODEL LOADED SUCCESSFULLY"
-    )
-
-    print(
-        "======================================"
-    )
-
-    print(
-        "Selected Model:",
-        model_name
-    )
-
-    print(
-        "Features Expected:",
-        len(model_features)
-    )
-
-
-except Exception as error:
-
-    print(
-        "MODEL LOADING ERROR:",
-        error
-    )
-
-    model = None
-
-    model_features = None
-
-    model_name = None
-
-
-# ============================================================
-# USER INPUT MODEL
-# ============================================================
-
-class StudentData(BaseModel):
-
-    # Personal / Admission
-    age: int = Field(
-        ge=15,
-        le=100
-    )
-
-    gender: Literal[
-        "Male",
-        "Female"
-    ]
-
-    admission_grade: float = Field(
-        ge=0,
-        le=200
-    )
-
-
-    # Financial
-    scholarship_holder: bool
-
-    debtor: bool
-
-    tuition_fees_up_to_date: bool
-
-
-    # Semester 1
-    semester1_enrolled_units: int = Field(
-        ge=0
-    )
-
-    semester1_approved_units: int = Field(
-        ge=0
-    )
-
-    semester1_grade: float = Field(
-        ge=0,
-        le=20
-    )
-
-
-    # Semester 2
-    semester2_enrolled_units: int = Field(
-        ge=0
-    )
-
-    semester2_approved_units: int = Field(
-        ge=0
-    )
-
-    semester2_grade: float = Field(
-        ge=0,
-        le=20
-    )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Semester 2 approved units "
+                "cannot be greater than "
+                "enrolled units."
+            )
+        )
 
 
 # ============================================================
@@ -212,7 +186,7 @@ def home():
             "Student Academic Risk Prediction API",
 
         "version":
-            "2.0",
+            "3.0",
 
         "status":
             "running"
@@ -220,7 +194,7 @@ def home():
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH
 # ============================================================
 
 @app.get("/health")
@@ -240,16 +214,379 @@ def health():
         "features_expected":
             (
                 len(model_features)
-
                 if model_features
-
                 else 0
             )
     }
 
 
 # ============================================================
-# PREDICTION
+# CREATE STUDENT
+# ============================================================
+
+@app.post("/students")
+def create_student(
+
+    data: StudentCreate,
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    validate_student(
+        data
+    )
+
+
+    student = StudentDB(
+
+        name=
+            data.name,
+
+        age=
+            data.age,
+
+        gender=
+            data.gender,
+
+        admission_grade=
+            data.admission_grade,
+
+        scholarship_holder=
+            data.scholarship_holder,
+
+        debtor=
+            data.debtor,
+
+        tuition_fees_up_to_date=
+            data.tuition_fees_up_to_date,
+
+        semester1_enrolled_units=
+            data.semester1_enrolled_units,
+
+        semester1_approved_units=
+            data.semester1_approved_units,
+
+        semester1_grade=
+            data.semester1_grade,
+
+        semester2_enrolled_units=
+            data.semester2_enrolled_units,
+
+        semester2_approved_units=
+            data.semester2_approved_units,
+
+        semester2_grade=
+            data.semester2_grade
+    )
+
+
+    db.add(
+        student
+    )
+
+    db.commit()
+
+    db.refresh(
+        student
+    )
+
+
+    return {
+
+        "success":
+            True,
+
+        "message":
+            "Student created successfully.",
+
+        "student":
+            student_to_dict(
+                student
+            )
+    }
+
+
+# ============================================================
+# GET ALL STUDENTS
+# ============================================================
+
+@app.get("/students")
+def get_students(
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    students = (
+
+        db.query(
+            StudentDB
+        )
+
+        .order_by(
+            StudentDB.id.desc()
+        )
+
+        .all()
+    )
+
+
+    return {
+
+        "success":
+            True,
+
+        "count":
+            len(students),
+
+        "students": [
+
+            student_to_dict(
+                student
+            )
+
+            for student in students
+
+        ]
+    }
+
+
+# ============================================================
+# GET ONE STUDENT
+# ============================================================
+
+@app.get(
+    "/students/{student_id}"
+)
+def get_student(
+
+    student_id: int,
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    student = (
+
+        db.query(
+            StudentDB
+        )
+
+        .filter(
+            StudentDB.id
+            ==
+            student_id
+        )
+
+        .first()
+    )
+
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+
+    return {
+
+        "success":
+            True,
+
+        "student":
+            student_to_dict(
+                student
+            )
+    }
+
+
+# ============================================================
+# UPDATE STUDENT
+# ============================================================
+
+@app.put(
+    "/students/{student_id}"
+)
+def update_student(
+
+    student_id: int,
+
+    data: StudentUpdate,
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    student = (
+
+        db.query(
+            StudentDB
+        )
+
+        .filter(
+            StudentDB.id
+            ==
+            student_id
+        )
+
+        .first()
+    )
+
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+
+    validate_student(
+        data
+    )
+
+
+    student.name = (
+        data.name
+    )
+
+    student.age = (
+        data.age
+    )
+
+    student.gender = (
+        data.gender
+    )
+
+    student.admission_grade = (
+        data.admission_grade
+    )
+
+    student.scholarship_holder = (
+        data.scholarship_holder
+    )
+
+    student.debtor = (
+        data.debtor
+    )
+
+    student.tuition_fees_up_to_date = (
+        data.tuition_fees_up_to_date
+    )
+
+    student.semester1_enrolled_units = (
+        data.semester1_enrolled_units
+    )
+
+    student.semester1_approved_units = (
+        data.semester1_approved_units
+    )
+
+    student.semester1_grade = (
+        data.semester1_grade
+    )
+
+    student.semester2_enrolled_units = (
+        data.semester2_enrolled_units
+    )
+
+    student.semester2_approved_units = (
+        data.semester2_approved_units
+    )
+
+    student.semester2_grade = (
+        data.semester2_grade
+    )
+
+
+    db.commit()
+
+    db.refresh(
+        student
+    )
+
+
+    return {
+
+        "success":
+            True,
+
+        "message":
+            "Student updated successfully.",
+
+        "student":
+            student_to_dict(
+                student
+            )
+    }
+
+
+# ============================================================
+# DELETE STUDENT
+# ============================================================
+
+@app.delete(
+    "/students/{student_id}"
+)
+def delete_student(
+
+    student_id: int,
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    student = (
+
+        db.query(
+            StudentDB
+        )
+
+        .filter(
+            StudentDB.id
+            ==
+            student_id
+        )
+
+        .first()
+    )
+
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+
+    db.delete(
+        student
+    )
+
+    db.commit()
+
+
+    return {
+
+        "success":
+            True,
+
+        "message":
+            "Student deleted successfully."
+    }
+
+
+# ============================================================
+# DIRECT PREDICTION
 # ============================================================
 
 @app.post("/predict")
@@ -257,485 +594,133 @@ def predict_student(
     data: StudentData
 ):
 
-
-    # ========================================================
-    # CHECK MODEL
-    # ========================================================
-
-    if model is None:
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail="ML model is not loaded."
-        )
-
-
-    # ========================================================
-    # VALIDATION
-    # ========================================================
-
-    if (
-        data.semester1_approved_units
-        >
-        data.semester1_enrolled_units
-    ):
-
-        raise HTTPException(
-
-            status_code=400,
-
-            detail=(
-                "Semester 1 approved units "
-                "cannot be greater than "
-                "Semester 1 enrolled units."
-            )
-        )
-
-
-    if (
-        data.semester2_approved_units
-        >
-        data.semester2_enrolled_units
-    ):
-
-        raise HTTPException(
-
-            status_code=400,
-
-            detail=(
-                "Semester 2 approved units "
-                "cannot be greater than "
-                "Semester 2 enrolled units."
-            )
-        )
-
-
     try:
 
-        # ====================================================
-        # CONVERT HUMAN-READABLE VALUES
-        # ====================================================
-
-        # Dataset:
-        # Male   = 1
-        # Female = 0
-
-        gender_value = (
-
-            1
-
-            if data.gender == "Male"
-
-            else 0
+        return run_prediction(
+            data
         )
 
 
-        scholarship_value = int(
-            data.scholarship_holder
+    except ValueError as error:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
         )
-
-
-        debtor_value = int(
-            data.debtor
-        )
-
-
-        tuition_value = int(
-            data.tuition_fees_up_to_date
-        )
-
-
-        # ====================================================
-        # USER-ENTERED FEATURES
-        # ====================================================
-
-        student_data = {
-
-            "Age at enrollment":
-                data.age,
-
-            "Gender":
-                gender_value,
-
-            "Admission grade":
-                data.admission_grade,
-
-            "Scholarship holder":
-                scholarship_value,
-
-            "Debtor":
-                debtor_value,
-
-            "Tuition fees up to date":
-                tuition_value,
-
-            "Curricular units 1st sem (enrolled)":
-                data.semester1_enrolled_units,
-
-            "Curricular units 1st sem (approved)":
-                data.semester1_approved_units,
-
-            "Curricular units 1st sem (grade)":
-                data.semester1_grade,
-
-            "Curricular units 2nd sem (enrolled)":
-                data.semester2_enrolled_units,
-
-            "Curricular units 2nd sem (approved)":
-                data.semester2_approved_units,
-
-            "Curricular units 2nd sem (grade)":
-                data.semester2_grade
-        }
-
-
-        # ====================================================
-        # FEATURE 1
-        # SEMESTER 1 PASS RATE
-        # ====================================================
-
-        if data.semester1_enrolled_units > 0:
-
-            semester1_pass_rate = (
-
-                data.semester1_approved_units
-
-                /
-
-                data.semester1_enrolled_units
-            )
-
-        else:
-
-            semester1_pass_rate = 0
-
-
-        student_data[
-            "Semester1_Pass_Rate"
-        ] = semester1_pass_rate
-
-
-        # ====================================================
-        # FEATURE 2
-        # SEMESTER 2 PASS RATE
-        # ====================================================
-
-        if data.semester2_enrolled_units > 0:
-
-            semester2_pass_rate = (
-
-                data.semester2_approved_units
-
-                /
-
-                data.semester2_enrolled_units
-            )
-
-        else:
-
-            semester2_pass_rate = 0
-
-
-        student_data[
-            "Semester2_Pass_Rate"
-        ] = semester2_pass_rate
-
-
-        # ====================================================
-        # FEATURE 3
-        # AVERAGE SEMESTER GRADE
-        # ====================================================
-
-        average_grade = (
-
-            data.semester1_grade
-
-            +
-
-            data.semester2_grade
-
-        ) / 2
-
-
-        student_data[
-            "Average_Semester_Grade"
-        ] = average_grade
-
-
-        # ====================================================
-        # FEATURE 4
-        # ACADEMIC PROGRESS
-        # ====================================================
-
-        academic_progress = (
-
-            data.semester2_grade
-
-            -
-
-            data.semester1_grade
-        )
-
-
-        student_data[
-            "Academic_Progress"
-        ] = academic_progress
-
-
-        # ====================================================
-        # FEATURE 5
-        # TOTAL APPROVED UNITS
-        # ====================================================
-
-        total_approved = (
-
-            data.semester1_approved_units
-
-            +
-
-            data.semester2_approved_units
-        )
-
-
-        student_data[
-            "Total_Approved_Units"
-        ] = total_approved
-
-
-        # ====================================================
-        # FEATURE 6
-        # FINANCIAL RISK
-        # ====================================================
-
-        financial_risk = (
-
-            debtor_value
-
-            +
-
-            (
-                1
-                -
-                tuition_value
-            )
-        )
-
-
-        student_data[
-            "Financial_Risk"
-        ] = financial_risk
-
-
-        # ====================================================
-        # FEATURE 7
-        # AGE GROUP
-        # ====================================================
-
-        if data.age <= 20:
-
-            age_group = 0
-
-
-        elif data.age <= 25:
-
-            age_group = 1
-
-
-        elif data.age <= 30:
-
-            age_group = 2
-
-
-        elif data.age <= 40:
-
-            age_group = 3
-
-
-        else:
-
-            age_group = 4
-
-
-        student_data[
-            "Age_Group"
-        ] = age_group
-
-
-        # ====================================================
-        # CREATE DATAFRAME
-        # ====================================================
-
-        student_df = pd.DataFrame(
-            [student_data]
-        )
-
-
-        # Force exact feature order used during training
-        student_df = student_df.reindex(
-            columns=model_features
-        )
-
-
-        # ====================================================
-        # CHECK FEATURES
-        # ====================================================
-
-        if student_df.isnull().any().any():
-
-            missing_features = (
-
-                student_df.columns[
-
-                    student_df.isnull().any()
-
-                ].tolist()
-            )
-
-
-            raise ValueError(
-
-                "Missing model features: "
-
-                +
-
-                str(missing_features)
-            )
-
-
-        # ====================================================
-        # MODEL PREDICTION
-        # ====================================================
-
-        prediction = model.predict(
-            student_df
-        )[0]
-
-
-        # ====================================================
-        # PROBABILITIES
-        # ====================================================
-
-        probabilities = model.predict_proba(
-            student_df
-        )[0]
-
-
-        probability_result = {}
-
-
-        for class_name, probability in zip(
-
-            model.classes_,
-
-            probabilities
-
-        ):
-
-            probability_result[
-                str(class_name)
-            ] = round(
-
-                float(probability)
-                *
-                100,
-
-                2
-            )
-
-
-        # ====================================================
-        # RISK LEVEL
-        # ====================================================
-
-        if prediction == "Dropout":
-
-            risk_level = "HIGH"
-
-
-        elif prediction == "Enrolled":
-
-            risk_level = "MEDIUM"
-
-
-        else:
-
-            risk_level = "LOW"
-
-
-        # ====================================================
-        # RESPONSE
-        # ====================================================
-
-        return {
-
-            "success":
-                True,
-
-            "prediction":
-                str(prediction),
-
-            "risk_level":
-                risk_level,
-
-            "probabilities":
-                probability_result,
-
-            "student_summary": {
-
-                "age":
-                    data.age,
-
-                "gender":
-                    data.gender,
-
-                "admission_grade":
-                    data.admission_grade,
-
-                "semester1_pass_rate":
-                    round(
-                        semester1_pass_rate * 100,
-                        2
-                    ),
-
-                "semester2_pass_rate":
-                    round(
-                        semester2_pass_rate * 100,
-                        2
-                    ),
-
-                "average_semester_grade":
-                    round(
-                        average_grade,
-                        2
-                    ),
-
-                "academic_progress":
-                    round(
-                        academic_progress,
-                        2
-                    ),
-
-                "total_approved_units":
-                    total_approved,
-
-                "financial_risk_score":
-                    financial_risk
-            }
-        }
-
-
-    except HTTPException:
-
-        raise
 
 
     except Exception as error:
 
         raise HTTPException(
-
             status_code=500,
+            detail=str(error)
+        )
 
+
+# ============================================================
+# PREDICT SAVED STUDENT
+# ============================================================
+
+@app.post(
+    "/students/{student_id}/predict"
+)
+def predict_saved_student(
+
+    student_id: int,
+
+    db: Session = Depends(
+        get_db
+    )
+):
+
+    student = (
+
+        db.query(
+            StudentDB
+        )
+
+        .filter(
+            StudentDB.id
+            ==
+            student_id
+        )
+
+        .first()
+    )
+
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+
+    data = StudentData(
+
+        age=
+            student.age,
+
+        gender=
+            student.gender,
+
+        admission_grade=
+            student.admission_grade,
+
+        scholarship_holder=
+            student.scholarship_holder,
+
+        debtor=
+            student.debtor,
+
+        tuition_fees_up_to_date=
+            student.tuition_fees_up_to_date,
+
+        semester1_enrolled_units=
+            student.semester1_enrolled_units,
+
+        semester1_approved_units=
+            student.semester1_approved_units,
+
+        semester1_grade=
+            student.semester1_grade,
+
+        semester2_enrolled_units=
+            student.semester2_enrolled_units,
+
+        semester2_approved_units=
+            student.semester2_approved_units,
+
+        semester2_grade=
+            student.semester2_grade
+    )
+
+
+    try:
+
+        prediction = run_prediction(
+            data
+        )
+
+        return {
+
+            "student": {
+
+                "id":
+                    student.id,
+
+                "name":
+                    student.name
+            },
+
+            **prediction
+        }
+
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
             detail=str(error)
         )
